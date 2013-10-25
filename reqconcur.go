@@ -1,7 +1,7 @@
 /*
 Make a bunch of requests against a domain.
 
-This can handle providing client side x.509/rsa 
+This can handle providing client side x.509/rsa
 */
 package main
 
@@ -10,17 +10,18 @@ import (
 	"flag"
 	"log"
 	"net/http"
-  "os"
+	"os"
 )
 
 var (
 	config_url, config_cert, config_key  string
 	config_requests, config_workers      int
 	config_head_method, config_fail_quit bool
+	config_quiet                         bool
 	routines                             int = 15
 	results                              chan stat
-	quit_now                             chan *http.Response
-	codes                                map[int]uint = make(map[int]uint)
+	quit_now                             chan *http.Response = make(chan *http.Response)
+	codes                                map[int]uint        = make(map[int]uint)
 	count                                int
 	cert                                 tls.Certificate
 	err                                  error
@@ -34,6 +35,7 @@ func init() {
 	flag.IntVar(&config_workers, "workers", 5, "Number of workers to use")
 	flag.BoolVar(&config_head_method, "head", false, "Whether to use HTTP HEAD (default is GET)")
 	flag.BoolVar(&config_fail_quit, "fail", false, "Whether to exit on a non-OK response")
+	flag.BoolVar(&config_quiet, "quiet", false, "do not print all responses")
 }
 
 func main() {
@@ -43,9 +45,9 @@ func main() {
 		InsecureSkipVerify: true,
 	}
 
-  if len(config_url) == 0 {
-    log.Fatal("Please actually provide a -url to run against")
-  }
+	if len(config_url) == 0 {
+		log.Fatal("Please actually provide a -url to run against")
+	}
 
 	// load the cert if provided
 	if len(config_cert) != 0 && len(config_key) != 0 {
@@ -66,6 +68,8 @@ func main() {
 	if config_workers > routines {
 		routines = config_workers
 	}
+
+  log.Printf("Please wait, calling against [%s] ...", config_url)
 	results = make(chan stat, routines)
 	for i := 0; i < config_workers; i++ {
 		go func() {
@@ -88,13 +92,16 @@ func main() {
 					log.Printf("ERROR: %s", err)
 				} else {
 					codes[resp.StatusCode]++
-					go func() {
-						results <- respStat(resp)
-					}()
+          // just don't process this response if we need to be quieter
+					if !config_quiet {
+						go func() {
+							results <- respStat(resp)
+						}()
+					}
 				}
-        if resp.StatusCode != 200 {
-          quit_now <- resp
-        }
+				if resp.StatusCode != 200 {
+					quit_now <- resp
+				}
 				count++
 			}
 		}()
@@ -104,9 +111,9 @@ func main() {
 		case r := <-results:
 			log.Println(r)
 		case req := <-quit_now:
-      log.Printf("made %d requests before failure", count)
-      log.Printf("ERROR: %#v", req)
-      os.Exit(2)
+			log.Printf("made %d requests before failure", count)
+			log.Printf("ERROR: %#v", req)
+			os.Exit(2)
 		}
 		if count == (config_requests * config_workers) {
 			break
