@@ -65,12 +65,9 @@ func main() {
 		Transport: tr,
 	}
 
-	if config_workers > routines {
-		routines = config_workers
-	}
-
 	log.Printf("Please wait, calling against [%s] ...", config_url)
-	results = make(chan stat, routines)
+	results = make(chan stat, config_workers)
+	workers := make(chan *http.Request, config_workers)
 	for i := 0; i < config_workers; i++ {
 		go func() {
 			for j := 0; j < config_requests; j++ {
