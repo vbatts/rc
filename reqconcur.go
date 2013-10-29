@@ -11,16 +11,19 @@ import (
 	"log"
 	"net/http"
 	"os"
-  "os/signal"
+	"os/signal"
+	"runtime"
 )
 
 var (
 	config_url, config_cert, config_key  string
 	config_requests, config_workers      int64
+	config_cpus                          int
 	config_head_method, config_fail_quit bool
 	config_quiet                         bool
 	routines                             int = 15
 	results                              chan stat
+	quit_now                             chan bool
 	fail_now                             chan *http.Response = make(chan *http.Response)
 	codes                                map[int]uint        = make(map[int]uint)
 	cert                                 tls.Certificate
@@ -33,6 +36,7 @@ func init() {
 	flag.StringVar(&config_key, "key", "", "RSA key file to use")
 	flag.Int64Var(&config_requests, "requests", 10, "Number of requests to perform")
 	flag.Int64Var(&config_workers, "workers", 5, "Number of workers to use")
+	flag.IntVar(&config_cpus, "cpus", runtime.NumCPU(), "Number of CPUs to use (defaults to all)")
 	flag.BoolVar(&config_head_method, "head", false, "Whether to use HTTP HEAD (default is GET)")
 	flag.BoolVar(&config_fail_quit, "fail", false, "Whether to exit on a non-OK response")
 	flag.BoolVar(&config_quiet, "quiet", false, "do not print all responses")
@@ -67,6 +71,7 @@ func main() {
 	}()
 
 	flag.Parse()
+	runtime.GOMAXPROCS(config_cpus)
 
 	t_config := tls.Config{
 		InsecureSkipVerify: true,
@@ -94,29 +99,39 @@ func main() {
 
 	log.Printf("Please wait, calling against [%s] ...", config_url)
 	results = make(chan stat, config_workers)
-	workers := make(chan *http.Request, config_workers)
+	worker_queue := make(chan *http.Request, config_workers)
 
 	// rev up these workers
 	for i := int64(0); i < config_workers; i++ {
 		go func() {
 			// this goroutine needs a channel to receive and cleanup
 			for {
-				resp, err := client.Do(<-workers)
-				if err != nil {
-					log.Printf("ERROR: setting up request %s", err)
-					if config_fail_quit {
-						os.Exit(2)
+				select {
+				case req, ok := <-worker_queue:
+					if !ok {
+						worker_queue = nil
+					} else {
+						resp, err := client.Do(req)
+						if err != nil {
+							log.Printf("ERROR: setting up request %s", err)
+							if config_fail_quit {
+								os.Exit(2)
+							}
+						}
+						codes[resp.StatusCode]++
+						if config_fail_quit && resp.StatusCode != 200 {
+							fail_now <- resp
+						}
+						go func() {
+							// this goroutine will spin off and get harvested
+							results <- respStat(resp)
+						}()
+						resp.Body.Close()
 					}
 				}
-				go func() {
-					// this goroutine will spin off and get harvested
-					codes[resp.StatusCode]++
-					results <- respStat(resp)
-					if config_fail_quit && resp.StatusCode != 200 {
-						fail_now <- resp
-					}
-				}()
-        resp.Body.Close()
+				if worker_queue == nil {
+					break
+				}
 			}
 		}()
 	}
@@ -139,7 +154,7 @@ func main() {
 				os.Exit(2)
 			}
 		}
-		workers <- r
+		worker_queue <- r
 	}
 
 	for {
@@ -153,11 +168,12 @@ func main() {
 			log.Printf("made %d requests before failure", (reqs.Total - config_requests))
 			log.Printf("ERROR: %#v", req)
 			os.Exit(2)
+		case <-quit_now:
+			log.Println("HTTP Codes:")
+			for k, v := range codes {
+				log.Printf("  %d: %d", k, v)
+			}
 		}
-	}
-	log.Println("HTTP Codes:")
-	for k, v := range codes {
-		log.Printf("  %d: %d", k, v)
 	}
 }
 
