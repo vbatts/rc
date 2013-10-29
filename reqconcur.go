@@ -69,7 +69,7 @@ func main() {
 		routines = config_workers
 	}
 
-  log.Printf("Please wait, calling against [%s] ...", config_url)
+	log.Printf("Please wait, calling against [%s] ...", config_url)
 	results = make(chan stat, routines)
 	for i := 0; i < config_workers; i++ {
 		go func() {
@@ -92,12 +92,9 @@ func main() {
 					log.Printf("ERROR: %s", err)
 				} else {
 					codes[resp.StatusCode]++
-          // just don't process this response if we need to be quieter
-					if !config_quiet {
-						go func() {
-							results <- respStat(resp)
-						}()
-					}
+					go func() {
+						results <- respStat(resp)
+					}()
 				}
 				if resp.StatusCode != 200 {
 					quit_now <- resp
@@ -109,7 +106,10 @@ func main() {
 	for {
 		select {
 		case r := <-results:
-			log.Println(r)
+			// just don't process this response if we need to be quieter
+			if !config_quiet {
+				log.Println(r)
+			}
 		case req := <-quit_now:
 			log.Printf("made %d requests before failure", count)
 			log.Printf("ERROR: %#v", req)
