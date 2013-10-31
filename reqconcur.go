@@ -21,13 +21,11 @@ var (
 	config_cpus                          int
 	config_head_method, config_fail_quit bool
 	config_quiet                         bool
-	routines                             int = 15
-	results                              chan stat
-	quit_now                             chan bool
+	routines                             int                 = 15
 	fail_now                             chan *http.Response = make(chan *http.Response)
-	codes                                map[int]uint        = make(map[int]uint)
-	cert                                 tls.Certificate
-	err                                  error
+	//codes                                map[int]uint        = make(map[int]uint)
+	cert tls.Certificate
+	err  error
 )
 
 func init() {
@@ -49,7 +47,7 @@ type Requests struct {
 }
 
 func (r *Requests) Next() (*http.Request, error) {
-	defer func() { r.Total = r.Total - 1 }()
+	defer func() { r.Total-- }()
 	return http.NewRequest(r.Method, r.Url, nil)
 }
 
@@ -98,42 +96,28 @@ func main() {
 	}
 
 	log.Printf("Please wait, calling against [%s] ...", config_url)
-	results = make(chan stat, config_workers)
-	worker_queue := make(chan *http.Request, config_workers)
+	worker_in_queue := make(chan *http.Request, config_workers)
+	worker_out_queue := make(chan *http.Response, config_workers)
 
 	// rev up these workers
 	for i := int64(0); i < config_workers; i++ {
-		go func() {
-			// this goroutine needs a channel to receive and cleanup
-			for {
-				select {
-				case req, ok := <-worker_queue:
-					if !ok {
-						worker_queue = nil
-					} else {
-						resp, err := client.Do(req)
-						if err != nil {
-							log.Printf("ERROR: setting up request %s", err)
-							if config_fail_quit {
-								os.Exit(2)
-							}
-						}
-						codes[resp.StatusCode]++
-						if config_fail_quit && resp.StatusCode != 200 {
-							fail_now <- resp
-						}
-						go func() {
-							// this goroutine will spin off and get harvested
-							results <- respStat(resp)
-						}()
-						resp.Body.Close()
-					}
-				}
-				if worker_queue == nil {
-					break
+		/*
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("ERROR: setting up request %s", err)
+				if config_fail_quit {
+					os.Exit(2)
 				}
 			}
-		}()
+			if config_fail_quit && resp.StatusCode != 200 {
+				fail_now <- resp
+			}
+			if !config_quiet {
+				log.Println(respStat(resp))
+			}
+			resp.Body.Close()
+		*/
+		go Worker(client, worker_in_queue, worker_out_queue, config_fail_quit)
 	}
 
 	reqs := &Requests{
@@ -154,45 +138,46 @@ func main() {
 				os.Exit(2)
 			}
 		}
-		worker_queue <- r
+		worker_in_queue <- r
 	}
 
+	go func() {
+		req := <-fail_now
+		log.Printf("made %d requests before failure", (reqs.Total - config_requests))
+		log.Printf("ERROR: %#v", req)
+		os.Exit(2)
+	}()
+
+  count := int64(0)
+  for r := range worker_out_queue {
+    log.Printf("%#v", r)
+    count++
+    if count == config_requests {
+      break
+    }
+  }
+
+}
+
+func Worker(client *http.Client, in chan *http.Request, out chan *http.Response, fail_early bool) {
 	for {
 		select {
-		case r := <-results:
-			// just don't process this response if we need to be quieter
-			if !config_quiet {
-				log.Println(r)
-			}
-		case req := <-fail_now:
-			log.Printf("made %d requests before failure", (reqs.Total - config_requests))
-			log.Printf("ERROR: %#v", req)
-			os.Exit(2)
-		case <-quit_now:
-			log.Println("HTTP Codes:")
-			for k, v := range codes {
-				log.Printf("  %d: %d", k, v)
+		case req, ok := <-in:
+			if !ok {
+				in = nil
+			} else {
+				resp, err := client.Do(req)
+				if err != nil {
+					log.Printf("ERROR: setting up request %s", err)
+					if fail_early {
+						return
+					}
+				}
+				out <- resp
 			}
 		}
+		if in == nil {
+			break
+		}
 	}
-}
-
-type stat struct {
-	size int64
-	code int
-	pass bool
-}
-
-func respStat(resp *http.Response) (r_stat stat) {
-	r_stat.size = resp.ContentLength
-	r_stat.code = resp.StatusCode
-	if r_stat.code > 499 && r_stat.size > 340 {
-		log.Println(resp)
-	}
-	if r_stat.code == 200 {
-		r_stat.pass = true
-	} else {
-		r_stat.pass = false
-	}
-	return
 }
