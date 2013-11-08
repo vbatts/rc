@@ -101,23 +101,9 @@ func main() {
 
 	// rev up these workers
 	for i := int64(0); i < config_workers; i++ {
-		/*
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("ERROR: setting up request %s", err)
-				if config_fail_quit {
-					os.Exit(2)
-				}
-			}
-			if config_fail_quit && resp.StatusCode != 200 {
-				fail_now <- resp
-			}
-			if !config_quiet {
-				log.Println(respStat(resp))
-			}
-			resp.Body.Close()
-		*/
-		go Worker(client, worker_in_queue, worker_out_queue, config_fail_quit)
+		go Worker(client,
+			worker_in_queue,
+			worker_out_queue, config_fail_quit)
 	}
 
 	reqs := &Requests{
@@ -130,16 +116,19 @@ func main() {
 		reqs.Method = "GET"
 	}
 
-	for reqs.Total != 0 {
-		r, err := reqs.Next()
-		if err != nil {
-			log.Printf("ERROR: setting up request %s", err)
-			if config_fail_quit {
-				os.Exit(2)
+	// holy moly. this thing was blocking!
+	go func() {
+		for reqs.Total != 0 {
+			r, err := reqs.Next()
+			if err != nil {
+				log.Printf("ERROR: setting up request %s", err)
+				if config_fail_quit {
+					os.Exit(2)
+				}
 			}
+			worker_in_queue <- r
 		}
-		worker_in_queue <- r
-	}
+	}()
 
 	go func() {
 		req := <-fail_now
@@ -148,36 +137,41 @@ func main() {
 		os.Exit(2)
 	}()
 
-  count := int64(0)
-  for r := range worker_out_queue {
-    log.Printf("%#v", r)
-    count++
-    if count == config_requests {
-      break
-    }
-  }
+	count := int64(0)
+	for resp := range worker_out_queue {
+		if !config_quiet {
+			log.Printf("%#v", resp)
+		}
+		count++
+		if count == config_requests {
+			break
+		}
+	}
+
+	log.Printf("completed %d requests", count)
 
 }
 
-func Worker(client *http.Client, in chan *http.Request, out chan *http.Response, fail_early bool) {
+func Worker(client *http.Client,
+	in chan *http.Request,
+	out chan *http.Response,
+	fail_early bool) {
 	for {
 		select {
-		case req, ok := <-in:
-			if !ok {
-				in = nil
-			} else {
-				resp, err := client.Do(req)
-				if err != nil {
-					log.Printf("ERROR: setting up request %s", err)
-					if fail_early {
-						return
-					}
+		case req := <-in:
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("ERROR: setting up request %s", err)
+				if fail_early {
+					return
 				}
-				out <- resp
 			}
-		}
-		if in == nil {
-			break
+			if fail_early && resp.StatusCode != 200 {
+				fail_now <- resp
+				return
+			}
+			resp.Body.Close()
+			out <- resp
 		}
 	}
 }
