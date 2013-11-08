@@ -10,6 +10,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -42,13 +43,13 @@ func init() {
 
 type Requests struct {
 	Method string
-	Url    string
+	Url    *url.URL
 	Total  int64
 }
 
 func (r *Requests) Next() (*http.Request, error) {
 	defer func() { r.Total-- }()
-	return http.NewRequest(r.Method, r.Url, nil)
+	return http.NewRequest(r.Method, r.Url.String(), nil)
 }
 
 func main() {
@@ -78,6 +79,10 @@ func main() {
 	if len(config_url) == 0 {
 		log.Fatal("Please actually provide a -url to run against")
 	}
+	u, err := url.Parse(config_url)
+	if err != nil {
+		log.Fatal("ERROR: %s", err)
+	}
 
 	// load the cert if provided
 	if len(config_cert) != 0 && len(config_key) != 0 {
@@ -88,20 +93,19 @@ func main() {
 		t_config.Certificates = append(t_config.Certificates, cert)
 	}
 
-
 	log.Printf("Please wait, calling against [%s] ...", config_url)
 	worker_in_queue := make(chan *http.Request, config_workers)
 	worker_out_queue := make(chan *http.Response, config_workers)
 
 	// rev up these workers
 	for i := int64(0); i < config_workers; i++ {
-		go Worker(&http.Client{ Transport: &http.Transport{ TLSClientConfig: &t_config } },
+		go Worker(&http.Client{Transport: &http.Transport{TLSClientConfig: &t_config}},
 			worker_in_queue,
 			worker_out_queue, config_fail_quit)
 	}
 
 	reqs := &Requests{
-		Url:   config_url,
+		Url:   u,
 		Total: config_requests,
 	}
 	if config_head_method {
