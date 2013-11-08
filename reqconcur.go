@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+  "time"
 )
 
 var (
@@ -114,6 +115,7 @@ func main() {
 		reqs.Method = "GET"
 	}
 
+  t_start := time.Now()
 	// holy moly. this thing was blocking!
 	go func() {
 		for reqs.Total != 0 {
@@ -146,7 +148,7 @@ func main() {
 		}
 	}
 
-	log.Printf("completed %d requests", count)
+	log.Printf("completed %d requests in %s", count, time.Since(t_start))
 
 }
 
