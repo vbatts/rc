@@ -14,7 +14,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-  "time"
+	"strings"
+	"time"
 )
 
 var (
@@ -80,6 +81,10 @@ func main() {
 	if len(config_url) == 0 {
 		log.Fatal("Please actually provide a -url to run against")
 	}
+	if !strings.HasPrefix(config_url, "http") {
+		log.Println("assuming http:// ...")
+		config_url = "http://" + config_url
+	}
 	u, err := url.Parse(config_url)
 	if err != nil {
 		log.Fatal("ERROR: %s", err)
@@ -115,7 +120,7 @@ func main() {
 		reqs.Method = "GET"
 	}
 
-  t_start := time.Now()
+	t_start := time.Now()
 	// holy moly. this thing was blocking!
 	go func() {
 		for reqs.Total != 0 {
