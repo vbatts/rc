@@ -88,12 +88,6 @@ func main() {
 		t_config.Certificates = append(t_config.Certificates, cert)
 	}
 
-	tr := &http.Transport{
-		TLSClientConfig: &t_config,
-	}
-	client := &http.Client{
-		Transport: tr,
-	}
 
 	log.Printf("Please wait, calling against [%s] ...", config_url)
 	worker_in_queue := make(chan *http.Request, config_workers)
@@ -101,7 +95,7 @@ func main() {
 
 	// rev up these workers
 	for i := int64(0); i < config_workers; i++ {
-		go Worker(client,
+		go Worker(&http.Client{ Transport: &http.Transport{ TLSClientConfig: &t_config } },
 			worker_in_queue,
 			worker_out_queue, config_fail_quit)
 	}
